@@ -1,0 +1,223 @@
+---
+title: "Study of Nitrogen Dioxide Concentration in New York based on Seasonal ARIMA Model"
+author: "Ran Li"
+date: "13/12/2020"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+geometry: margin=1.5cm
+header-includes:
+- \usepackage{booktabs}
+---
+```{r global_options, R.options=knitr::opts_chunk$set(warning=FALSE, message=FALSE)}
+```
+
+```{r setup, include=FALSE, echo = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(astsa)
+library(zoo)
+library(lubridate)
+library(tseries)
+library(forecast)
+library(kableExtra)
+library(knitr)
+library(xtable)
+```
+## Introduction
+  Air Pollution has become a global problem with the rapid development of economics these days. More and more problems in society are raised due to the severe air pollution such as chronic diseases and respiratory diseases in some regions, so it is worth studying the air pollutent time series in New York City, which is one of the busiest and crowdest city in the world. An approproiate model may help with forecasting air pollution and also help with policy making. Here we are going to build seasonal ARIMA model to the series and make prediction about air pollution.
+
+## Data
+Data we used for analysis in this article is open data scraped from United States Environmental Protection Agency website.$^{[1]}$. The whole dataset contains daily record for air pollution from January 1st 2000 to April 2016 (192 months and almost 5500 days in total) across the U.S in major cities including the New York City. In this article, we will focus on the study of monthly average of nitrogen dioxide($NO_2$) concentration in NYC, so data taken from other regions are deleted to get a smaller dataset. Also, in order to make our analysis easier (but this will cause some error), data detected are in Bronx (one of counties in New York).Overall, by taking monthly average during the data cleaning procedure, we have a 192-month(frequency = 12) time series. Similarly, we can obtain monthly average for other major pollutents as well, but we are going to focus on $NO_2$ here.\newline
+
+In order to test and compare models, we splits our series into training set containing data in first 176 months (January 2000 to December 2014) and testing set (January 2015 to April 2016), where the training set is used to build the Seasonal ARIMA model and the testing set for comparing model accuracy.Details will be discussed in result section.\newline
+
+## Results
+### Model Identification
+We build the model based on data in first 176 months (training set). The plot of series is shown in Figure 1. It can be seen that there is similar "U-shaped" pattern yearly. Spectral analysis can be done to show this periodicity. See Figure 6 for the Periodogram of this series. It is clear that a narrow peak occurs at 12, giving us the predominant frequency to be 1/12. It has periodogram 63.51932 with 95% confidence interval [17.21914,2508.879], indicating that our data cycles every 12 months(1 year). Other peridominant frequencies have periodogram far less than this one, more information is shown in Table 4. Therefore, the $s$ parameter in $SARIMA(p, d, q)(P, D, Q)_s$ is 12. Furthermore, this periodicity and the decreasing trend in the plot of series imply that the concentration of $NO_2$ is nonstationary.One can also tell the nonstationarity from the slowly decayed Autocorrelation Function(ACF), motivating us to perform the seasonal differencing by 1 (12 months, $D=1$). \newline
+
+```{r, echo = FALSE,results="hide"}
+setwd('/Users/ranli/Desktop/STA457 Final Project')
+data = read.csv("nyc_air.csv")
+Bronx = data %>% filter(County == "Bronx")
+Queens = data %>% filter(County == "Queens")
+Bronx_NO2 = Bronx %>% group_by(Date.Local) %>% summarize(NO2 = mean(NO2.Mean, na.rm = TRUE),.groups = 'drop')
+```
+
+```{r, echo = FALSE, fig.width = 4, fig.height = 3}
+year_month = as.yearmon(ymd(Bronx_NO2$Date.Local))
+Bronx_NO2 = cbind(Bronx_NO2,year_month)
+Bronx_NO2 = Bronx_NO2 %>%
+   group_by(year_month) %>% 
+   summarise(Month_Avg = mean(NO2),.groups = 'drop')
+Bronx_NO2 = Bronx_NO2 %>% select(Month_Avg)
+Bronx_NO2 = Bronx_NO2 %>% add_row(Month_Avg = 24, .before = 16)
+NO2.train = Bronx_NO2[1:176,]
+NO2.train = ts(NO2.train, start = c(2000, 5), frequency=12)
+NO2.test <-  ts(Bronx_NO2[177:192,], start = c(2015, 1), frequency = 12)
+Bronx_NO2 = ts(Bronx_NO2, start = c(2000, 5), frequency=12)
+```
+
+Figure 2 is the corresponding seasonally differenced data, along with its ACF and PACF. The series seem to have more stable variance and expectation from the plot. ACF and PACF also show indication of SARIMA model. So next we are going to estimate the order by observing the ACF and PACF plot.\newline
+
+```{r, echo = FALSE, results = "hide", fig.show = "hold", NO2.train, out.width = "50%"}
+
+NO2.train %>% ggtsdisplay(xlab="Date",main="Figure 1. NO2")
+auto.train.arima = auto.arima(NO2.train)
+
+NO2.train %>% diff(lag=12) %>% ggtsdisplay(xlab="Date", main ="Figure 2. Seasonally differenced NO2")
+```
+
+Based on ACF, for seasonal data, we can see there is obvious long spike at lag = 12, implying that the seasonal part should contain MA(1) component. Similarly, a long spike at lag = 1 indicates an MA(1) component for the nonseasonal part. From the PACF, we can see long spikes for lag = 1, 12 and lag = 24. So we propose first that seasoal part has AR(2) and nonseasonal part has AR(1). Combining together, we manually select $SARIMA(1, 0, 1)(2, 1, 1)_{12}$ model. \newline
+
+By slightly changing the order of model a little bit, we can obtain models that are very close to the one we selected manually, which are shown in Table 1 as below. Noticeably, among all these models, $SARIMA(1, 0, 0)(2, 1, 1)_{12}$ is the one selected automatically by using function `auto.arima()` in R. This model only differs in the order of moving average in nonseasonal part compared our manually selected one. \newline
+
+### Model Testing and Selection
+To compare models, we employee AIC, BIC creteria, prediction accuracy. Values of different creterion are shown in table one. The lower AIC and BIC, the better the model fits the dataset. Accuracy of model is identified by the Root Mean Square Error(RMSE). This is computed by predicting the monthly $NO_2$ concentration from January 2015 to April 2016 and comparing with actual values in the testing set. Lower RMSE implies better accuracy in prediction $^{[9]}$. \newline
+
+It is suprised to find that using these three creterion, neither our  manually chosen model nor the automatically chosen SARIMA model performs the best (See Table 2). Instead, $SARIMA(2, 0, 1)(2, 1, 1)_{12}$ has the lowest AIC, BIC and RMSE. Further, this model also passes the Ljung-Box test for residuals (result in figure 3). The Q-statsitic is never significant for lags shown, together with the shape of QQ-plot support the normality and independence of white noise assumption for the residuals, indicating that this model takes enough information from the dataset. Therefore $SARIMA(2, 0, 1)(2, 1, 1)_{12}$ is selected and will be employed in forecasting. The model can be written as:\newline
+$$(1-\phi_1B-\phi_2B^2)(1-\psi_1B^{12}-\psi_2B^{24})(1-B^{12})x_t = (1+\theta_1B)(1+\Theta_1 B^{12})w_t$$
+where $x_t$ is the monthly average of $NO_2$ concentration seires, $w_t$ is mormal white noise error and $B$ represents the backward operator.Other letters are parameters that will be estimated using maximum likelihood function. Results of estimation are shown in the following table 2.\newline
+
+We notice that even though our model passes the Ljung Box test for residuals, the p-values for the parameter estimate are not all significant, many estimates have large p-values indeed. But it is hard to find a SARIMA model that passes every test in this case. Limitation and weakness will be discussed further in the next section.\newline
+
+### Forecasting
+4 month forecasts of monthly average of $NO_2$ concentration (From May 2016 to April 2016) are made using $SARIMA(2, 0, 1)(2, 1, 1)_{12}$, plotted in Figure 4, where the slight blue regeion is the 80% confidenct interval and the dark blue band represents the 95% confidence interval. It seemes that the forecasts follow the pattern of the previous values and there is a general decreasing trend in the data. Detailed information of forecasts for next four months can be found in table 3.
+```{r, echo = FALSE, results = "hide",  fig.show = "hold", model, out.width = "50%"}
+estimate = sarima(NO2.train, 1, 0, 1, 2, 1, 1, 12)$ttable
+estimate = estimate[,-3]
+
+
+model1 = Arima(NO2.train, order=c(1,0,1),seasonal=c(2,1,1))
+model2 = Arima(NO2.train, order=c(1,0,0),seasonal=c(2,1,1))
+model3 = Arima(NO2.train, order=c(2,0,1),seasonal=c(2,1,1))
+model4 = Arima(NO2.train, order=c(1,0,0),seasonal=c(2,1,2))
+model5 = Arima(NO2.train, order=c(1,0,1),seasonal=c(1,1,1))
+model6 = Arima(NO2.train, order=c(1,0,1),seasonal=c(1,1,2))
+
+model = c("(1, 0, 1)(2, 1, 1)12",
+          "(1, 0, 0)(2, 1, 1)12",
+          "(2, 0, 1)(2, 1, 1)12",
+          "(1, 0, 0)(2, 1, 2)12",
+          "(1, 0, 1)(1, 1, 1)12",
+          "(1, 0, 1)(1, 1, 2)12")
+
+model_selection = AIC(model1 ,model2 ,model3,model4,model5,model6)
+rownames(model_selection) = model
+model_selection  = select(model_selection, -df)
+6
+BIC = BIC(model1 ,model2 ,model3,model4,model5,model6)$BIC
+model_selection = cbind(model_selection, BIC)
+ 
+
+test1 <- Arima(NO2.test, model=model1)
+test2 <- Arima(NO2.test, model=model2)
+test3 <- Arima(NO2.test, model=model3)
+test4 <- Arima(NO2.test, model=model4)
+test5 <- Arima(NO2.test, model=model5)
+test6 <- Arima(NO2.test, model=model6)
+
+RMSE = c(accuracy(test1)[2], 
+         accuracy(test2)[2],
+         accuracy(test3)[2],
+         accuracy(test4)[2],
+         accuracy(test5)[2],
+         accuracy(test6)[2])
+model_selection = cbind(model_selection, RMSE)
+
+forecast = Bronx_NO2 %>% Arima(order=c(2,0,1),seasonal=c(2,1,1)) %>%
+forecast(h=4)
+Bronx_NO2 %>% Arima(order=c(2,0,1),seasonal=c(2,1,1)) %>%
+forecast(h=12) %>% autoplot()+ggtitle("Figure 4. Forecasts from ARIMA(2,0,1)(2,1,1)[12]")
+```
+
+```{r, echo = FALSE,  results = 'asis', warning = F}
+t1 <- kable(model_selection, format = "latex", booktabs = TRUE, digits = 2)
+t2 <- kable(estimate, format = "latex", booktabs = TRUE, digits = 2)
+
+cat(c("\\begin{table}[!htb]
+    \\begin{minipage}{.5\\linewidth}
+      \\caption{Model Comparison}
+      \\centering",
+        t1,
+    "\\end{minipage}%
+    \\begin{minipage}{.5\\linewidth}
+      \\centering
+        \\caption{Estimate of Coefficients for (2, 0, 1)(2, 1, 1)12}",
+        t2,
+    "\\end{minipage} 
+\\end{table}"
+))  
+```
+
+
+```{r, echo = FALSE, fig.show = "hide",results = 'asis', warning = F}
+NO2.per = mvspec(Bronx_NO2, log = "no")
+spectrum = as.data.frame(NO2.per$details) %>% arrange((desc(spectrum)))
+Frequency = spectrum[1:4,]$frequency*(1/12)
+Spectrum = spectrum[1:4,]$spectrum
+U = qchisq(0.025, 2)
+L = qchisq(0.975, 2)
+Low95 = 2*Spectrum/L
+High95 = 2*Spectrum/U
+spec = data.frame(Frequency, Spectrum, Low95, High95)
+
+t3 = kable(forecast, format = "latex", booktabs = TRUE, digits = 2)
+
+t4 = kable(spec, format = "latex", booktabs = TRUE, digits = 3)
+
+cat(c("\\begin{table}[!htb]
+    \\begin{minipage}{.5\\linewidth}
+      \\caption{Forecast of Nitrogen Dioxide Concentration from May 2016 to August 2016}
+      \\centering",
+        t3,
+    "\\end{minipage}%
+    \\begin{minipage}{.5\\linewidth}
+      \\centering
+        \\caption{Predominant frequency and Spectrum}",
+        t4,
+    "\\end{minipage} 
+\\end{table}"
+))  
+```
+
+```{r, echo = FALSE, results = "hide", fig.show = "hold", out, out.width = "50%"}
+upper <- fitted(model3) + 1.96*sqrt(model3$sigma2)
+lower <- fitted(model3) - 1.96*sqrt(model3$sigma2)
+plot.default(NO2.train, type="n", ylim=range(lower,upper))
+polygon(c(time(NO2.train),rev(time(NO2.train))), c(upper,rev(lower)), 
+   col=rgb(0,0,0.6,0.2), border=FALSE)
+lines(NO2.train)
+lines(fitted(model3),col='red')
+
+out <- (NO2.train < lower | NO2.train > upper)
+points(time(NO2.train)[out], NO2.train[out], pch=19)
+
+NO2.per = as.data.frame(mvspec(Bronx_NO2, log = "no", plot = FALSE)$details)
+periodogram = data.frame(frequency = seq(0.0625, 6,0.0625), spectrum = NO2.per$spectrum)
+
+ggplot(data = periodogram)+geom_line(aes(x = frequency, y=spectrum))+scale_x_continuous()+theme(plot.margin = unit(c(1.5,1,1,1),"cm"))+ggtitle("Figure 6. Peridogram of NO2 Series")
+```
+
+## Discussion
+Qualitatively, from our model, we can tell a clear decreasing trend and periodicity in the monthly nitrogen dioxide concentration. This "U-shaped periodicity" is also observed in other countries as well, for example Shenzhen, China.$^{[8]}$ Spring and winter tends to have higher immision of $NO_2$ due to temperature and wind speed, it is shown that other major air pollutents including $PM_{10}$, $O_3$ and $SO_2$ also behave in similar periodic pattern.$^{[7]}$ Also, from the decreasing trend, we can see that New York air pollution is getting better in the latest decade, maybe due to effective environmental policies and increased public awareness.\newline
+
+From Figure 5, we can see that the predicted values are pretty close to the actual values where most of them are within the 95% confidence interval with the 1.485278% mean absolute percentage error. This model overall performs a nice fitness to our existing data and thus provide a method for making prediction of air pollution. Indeed, there has already been many sucessful satatistical practices in building ARIMA models for air pollution data in many countries around the world$^{[4],[5]}$. The effectiveness of prediction of ARIMA model has been appreciated by the many researches in different areas. Similar approach here may also apply to series of other major pollutents or the prediction of the Air Quality Index(AQI).\newline
+
+### Weakness and Next Steps
+**(1)** Many of our estimate of parameters based on maximum likelihood  are not significant. Even though it is not always easy to find a model that goes through all the model testing process and behaves nice enough in prediction for real world series, we are trying to select optimal ones among those.\newline
+**(2)** Even though ARIMA model performs nicely in short term, we can see that prediction becomes less accurate as time moves on. Increasing the accuracy for longer-range forecasts may be a step to consider next.\newline
+**(3)** In this model, we only consider the regression with its past values, but true air pollution may have correlation with other variables as well. Models that with other information considered may perform a better fittness and prediction.$^{[8]}$
+
+## References
+[1] https://aqs.epa.gov/aqsweb/airdata/download_files.html \newline
+[2]Box, G., Jenkins, G., (1976). Time Series Analysis: Forecasting and Control. Holden-Day, Boca Raton.\newline
+[3] Zhang, L., Lin, J., &amp; Qiu, R. (2018). Trend analysis and forecast of PM2.5 in Fuzhou, China using the ARIMA model. *Ecological Indicators*.\newline
+[4] Lee, M. H., &amp; Abd.Rahman, N. H. (2012). Seasonal ARIMA for Forecasting Air Pollution Index: A Case Study. *American Journal of Applied Sciences*, 570-578.\newline
+[5]Guarnaccia, C. (n.d.). ARIMA Models Application to Air Pollution Data in Monterrey, Mexico. *Mathematical Methods and Computational Techniques in Science and Engineering II*.\newline
+[6]Ye, Z. (2019). Air Pollutants Prediction in Shenzhen Based on ARIMA and Prophet Method. *E3S Web of Conferences*.\newline
+[7]Czarnecka, M., Nidzgorska-Lencewicz, J. (2011). Impact of weather conditions on winter and summer air quality. *Int. Agrophys.*, 25(1), 7-12.\newline
+[8]Mou, J., Zhao, X., Fan, J., &amp; Yan, Z. (2017). Time Series Prediction of AQI in Shenzhen Based on ARIMA Mode. *Journal of Environmental Hygiene*, 7(2), 102-107.\newline
+[9]Hyndman, R.J., & Athanasopoulos, G. (2018) Forecasting: principles and practice, 2nd edition, OTexts: Melbourne, Australia. OTexts.com/fpp2.
